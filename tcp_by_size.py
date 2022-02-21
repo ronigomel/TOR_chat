@@ -39,8 +39,10 @@ def recv_by_size(sock):
             else:
                 data += _d
 
+        """
         if TCP_DEBUG and size_header != b'':
             print("\n" + " Recv(%s)>>>%s" % (size_header, data.decode('utf-8')[:min(100, len(data))]), end='')
+            """
 
     if data_len != len(data):
         data = b''  # Partial data is like no data !
@@ -55,5 +57,5 @@ def send_with_size(sock, bdata):
 
     sock.send(bytea)
 
-    if TCP_DEBUG and len_data > 0:
-        print('\n' + " Sent(%s)>>>%s" % (len_data, bdata.decode('utf-8')[:min(100, len(bdata))]), end='')
+    """if TCP_DEBUG and len_data > 0:
+        print('\n' + " Sent(%s)>>>%s" % (len_data, bdata.decode('utf-8')[:min(100, len(bdata))]), end='')"""

@@ -26,14 +26,14 @@ def generate_keys():
 def main(ip: str, port: int):
     generate_keys()
 
-    srvr_socket = socket.socket()
-    srvr_socket.bind((ip, port))
-    srvr_socket.listen(1)
-    cli_sock, addr = srvr_socket.accept()  # first connection is always 127.0.0.1
+    srv_socket = socket.socket()
+    srv_socket.bind((ip, port))
+    srv_socket.listen(1)
+    cli_sock, addr = srv_socket.accept()  # first connection is always 127.0.0.1
 
     send_with_size(cli_sock, K_PUBLIC)  # sending the public key to the
 
-    t = threading.Thread(target=mailbox, args=(srvr_socket,))
+    t = threading.Thread(target=mailbox, args=(srv_socket,))
     t.start()
 
     while not STOP:
@@ -47,17 +47,20 @@ def main(ip: str, port: int):
             send_with_size(cli_sock, next_ip)
 
 
-def mailbox(srvr_sock: socket.socket):
+def mailbox(srv_sock: socket.socket):
     global K_PRIVATE
     global MAIL
     global NEXT_STOP
 
     wrap = OnionWrapping()
     while not STOP:
-        srvr_sock.listen(1)
-        mail_sock, mail_addr = srvr_sock.accept()
+        srv_sock.listen(1)
+        mail_sock, mail_addr = srv_sock.accept()
         data = recv_by_size(mail_sock)
         data = pickle.loads(data)
+
+        if data[0] == 'PING':
+            send_with_size(mail_sock, pickle.dumps('ALIVE'))
 
         decrypted_data = wrap.unwrap_with_rsa(data, K_PRIVATE)
         next_stop = decrypted_data[len(decrypted_data) - 1]
