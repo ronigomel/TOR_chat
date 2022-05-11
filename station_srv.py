@@ -3,7 +3,7 @@ import socket
 from tcp_by_size import recv_by_size, send_with_size
 import threading
 import pickle
-from onionwrapping import OnionWrapping
+from test2 import RsaWrapping
 
 K_PUBLIC = RSA.RsaKey
 K_PRIVATE = RSA.RsaKey
@@ -24,6 +24,7 @@ def generate_keys():
 
 
 def main(ip: str, port: int):
+    cipher = RsaWrapping(117, 128)
     generate_keys()
 
     srv_socket = socket.socket()
@@ -42,9 +43,11 @@ def main(ip: str, port: int):
                 to_send = pickle.dumps(MAIL)
             with NEXT_STOP_LOCK:
                 next_ip = NEXT_STOP
-
+            to_send = pickle.dumps([to_send, next_ip])
             send_with_size(cli_sock, to_send)
-            send_with_size(cli_sock, next_ip)
+        else:
+            with MAILBOX_LOCK:
+                send_with_size((pickle.dumps(MAIL)))
 
 
 def mailbox(srv_sock: socket.socket):
@@ -52,7 +55,7 @@ def mailbox(srv_sock: socket.socket):
     global MAIL
     global NEXT_STOP
 
-    wrap = OnionWrapping()
+    cipher = RsaWrapping()
     while not STOP:
         srv_sock.listen(1)
         mail_sock, mail_addr = srv_sock.accept()
@@ -62,13 +65,23 @@ def mailbox(srv_sock: socket.socket):
         if data[0] == 'PING':
             send_with_size(mail_sock, pickle.dumps('ALIVE'))
 
-        decrypted_data = wrap.unwrap_with_rsa(data, K_PRIVATE)
-        next_stop = decrypted_data[len(decrypted_data) - 1]
-        next_stop = wrap.unpad(next_stop)
-        decrypted_data.pop(len(decrypted_data) - 1)  # removes the ip of the next stop
+        decrypted_data = cipher.unwrap(data[0], data[1], K_PRIVATE)
+        if type(decrypted_data) == tuple:
+            next_stop = decrypted_data[0]
+            decrypted_data = decrypted_data[1:]
+            with MAILBOX_LOCK:
+                MAIL = decrypted_data
+            with NEXT_STOP_LOCK:
+                NEXT_STOP = next_stop
+        else:
+            decrypted_data = cipher.unwrap_single(decrypted_data, K_PRIVATE)
+            with MAILBOX_LOCK:
+                MAIL = decrypted_data
+            with NEXT_STOP_LOCK:
+                NEXT_STOP = ''
 
-        with MAILBOX_LOCK:
-            MAIL = decrypted_data
 
-        with NEXT_STOP_LOCK:
-            NEXT_STOP = next_stop
+
+if __name__ == '__main__':
+    k = [1,2,3,4]
+    print(k[1:])
