@@ -3,7 +3,7 @@ import socket
 import datetime
 from tcp_by_size import recv_by_size, send_with_size
 import pygame
-from test2 import RsaWrapping
+from onion_wrapping import RsaWrapping
 import pickle
 import threading
 import time
@@ -11,6 +11,7 @@ import re
 from random import shuffle
 import sys
 from msgs import Message
+from Crypto.PublicKey import RSA
 
 # ----------------------------------- GRAPHICS RELATED -----------------------------------
 
@@ -34,10 +35,11 @@ not_mymsg_img = 'media/not_mymsg_bubble.png'
 # ----------------------------------- INITIALISING -----------------------------------
 SRV_STATION_ADDR = 'stationsrv_address.txt'
 STOP = False
-DST_PUB_KEY = None
+with open('publickey8821.pem', 'r') as key:
+    DST_PUB_KEY = RSA.importKey(key.read())
 DST_ADDRESS = ()
 dst_lock = threading.Lock()
-WRAP = RsaWrapping(117, 128)
+WRAP = RsaWrapping(86, 128)
 
 msgs = []
 msgs_lock = threading.Lock()
@@ -64,148 +66,34 @@ def read_file(filename: str, permission: str):
 
 def main():
     global DST_PUB_KEY
+    global STOP
+    global IMG
+
+    """
     if len(sys.argv) == 2:
-        with open(sys.argv[1], 'rb') as f:
-            DST_PUB_KEY = f.read()
+        with open(sys.argv[1], 'r') as f:
+            DST_PUB_KEY = RSA.import_key(f.read())
+    """
 
     station_sock = socket.socket()
     ip, port = read_file(SRV_STATION_ADDR, 'r')  # complementary server only
     station_sock.connect((ip, port))
     log('NEW CONNECTION', ip, port)
 
-    public_k = recv_by_size(station_sock)
+    public_k = RSA.importKey(pickle.loads(recv_by_size(station_sock)))
+    log('RECEIVED DATA', ip, port)
 
     all_socket = socket.socket()
-
     ip_ss, port_ss = read_file('supersrv_address.txt', 'r')
+    print(ip_ss + ' ' + str(port_ss))
     all_socket.connect((ip_ss, port_ss))
-    to_send = ['HI', ip, port, public_k]
+    to_send = ['HI', ip, port, public_k.exportKey()]
     send_with_size(all_socket, pickle.dumps(to_send))
 
     all_socket.close()
 
-    t = threading.Thread(target=user_)
+    t = threading.Thread(target=user_, args=(station_sock,))
     t.start()
-
-    all_socket = socket.socket()
-    while not STOP:
-        data = pickle.loads(recv_by_size(station_sock))
-        if type(data) != list:
-            msg = got_mail(data)
-            next_stop = ''
-
-        else:
-            msg = data[0]
-            next_stop = data[1].split(':')
-            next_stop = (next_stop[0], int(next_stop[1]))
-
-        if next_stop != '':
-            all_socket.connect(next_stop)
-            send_with_size(all_socket, msg)
-        else:
-            new_message(False, msg, 'media/not_mymsg_bubble.png')
-
-
-def got_mail(data: str):
-    global DST_ADDRESS
-    data = data.rsplit('[', 1)
-    msg = data[0].rstrip(' ')
-    dst_addr = data[1].strip(']').split(':')[1:]
-    with dst_lock:
-        DST_ADDRESS = dst_addr[0], int(dst_addr[1])
-    return msg
-
-
-def change_screen(img_path: str):
-    global IMG
-    global FILE_NAME
-    FILE_NAME = img_path
-    IMG = pygame.image.load(img_path)
-    with SCREEN_LOCK:
-        SCREEN.fill(WHITE)
-        SCREEN.blit(IMG, (0, 0))
-    pygame.display.flip()
-
-
-def connect_supersrv():
-    supersrv_socket = socket.socket()
-    supersrv_addr = read_file('supersrv_address.txt', 'r')
-    supersrv_socket.connect(supersrv_addr)
-
-    send_with_size(supersrv_socket, pickle.dumps(['MSG']))
-    route = pickle.loads(recv_by_size(supersrv_socket))
-    return route
-
-
-def ip_validation(ip: str) -> bool:
-    regex = "^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$"
-    if re.search(regex, ip):
-        return True
-    return False
-
-
-def remix_route(route: dict, dst_ip: str) -> dict:
-    new_route = {dst_ip: DST_PUB_KEY}
-    keys = list(route.keys())
-    shuffle(keys)
-    for i in route:
-        new_route[i] = route[i]
-    return new_route
-
-
-def new_message(sent: bool, text: str, image_file):
-    global msg_counter
-    with msg_counter_lock:
-        msg_counter += 1
-        with msgs_lock:
-            if msg_counter >= 5:
-                y_place = msgs[len(msgs) - 1].get_placement()[1]
-                for i in range(len(msgs)):
-                    msgs[i].set_placement((msgs[i].get_placement()[0], msgs[i].get_placement()[1] - 102))
-                    print(msgs[i].get_text())
-                    if msgs[i].get_placement()[1] < 141:
-                        msgs[i].erase()
-            elif len(msgs) == 0:
-                y_place = 141
-            else:
-                y_place = msgs[len(msgs) - 1].get_placement()[1] + 102
-    x_place = 0
-    if sent:
-        x_place = 1002
-    m = Message(sent, text, image_file, (x_place, y_place))
-    with msgs_lock:
-        msgs.append(m)
-    update_msgs()
-
-
-def update_msgs():
-    with msgs_lock:
-        if len(msgs) >= 5:
-            with SCREEN_LOCK:
-                print(msgs[len(msgs) - 5].get_placement())
-                msgs[len(msgs) - 5].delete(SCREEN)
-        for i in range(len(msgs)):
-            if msgs[i].get_seen():
-                with SCREEN_LOCK:
-                    msgs[i].print(SCREEN)
-    pygame.display.flip()
-    pygame.display.update()
-
-
-def send_msg(data: str, destination_ip: tuple):
-    route = connect_supersrv()
-    new_route = remix_route(route, destination_ip)
-    ip, port = read_file(SRV_STATION_ADDR)
-    data = data + ' [return to: myaddr: ' + ip + ':' + str(port) + ']'
-    data = [WRAP.wrap_single(data, DST_PUB_KEY)]
-    for i in range(1, len(list(new_route.keys()))):
-        data.append(list(new_route.keys())[i] + ':' + str(route[list(new_route.keys())[i]][0]))
-    WRAP.wrapping(new_route, data)
-
-
-def user_():
-    global STOP
-    global IMG
 
     input_box = pygame.Rect(523, 388, 140, 32)
     font = pygame.font.Font(None, 25)
@@ -250,10 +138,10 @@ def user_():
                         text = ''
                         colour = colour_inactive
                         active = not active
-                    elif FILE_NAME == 'media/chat.jpg':
+                    elif FILE_NAME == 'media/chat.jpg' and text != '':
                         with open('my_messages.txt', 'a+') as msgs_file:
                             msgs_file.write(text + '\n')
-                            # send_msg(text, destination_station)
+                            send_msg(text, destination_station)
                             new_message(True, text, my_msg_img)
                         text = ''
                         # change_screen(FILE_NAME)
@@ -297,8 +185,138 @@ def user_():
             # If the user clicked on the input_box rect.
 
 
+def got_mail(data: str):
+    global DST_ADDRESS
+    data = data.rsplit('[', 1)
+    msg = data[0].rstrip(' ')
+    dst_addr = data[1].strip(']').split(':')
+    with dst_lock:
+        DST_ADDRESS = dst_addr[0], int(dst_addr[1])
+    return msg
+
+
+def change_screen(img_path: str):
+    global IMG
+    global FILE_NAME
+    FILE_NAME = img_path
+    IMG = pygame.image.load(img_path)
+    with SCREEN_LOCK:
+        SCREEN.fill(WHITE)
+        SCREEN.blit(IMG, (0, 0))
+    pygame.display.flip()
+
+
+def connect_supersrv(dst):
+    supersrv_socket = socket.socket()
+    supersrv_addr = read_file('supersrv_address.txt', 'r')
+    supersrv_socket.connect(supersrv_addr)
+    log('NEW CONNECTION', supersrv_addr[0], supersrv_addr[1])
+
+    send_with_size(supersrv_socket, pickle.dumps(['MSG', dst]))
+    log('SENT', supersrv_addr[0], supersrv_addr[1])
+    route = pickle.loads(recv_by_size(supersrv_socket))[1]
+    log('RECEIVED', supersrv_addr[0], supersrv_addr[1])
+    supersrv_socket.close()
+    for key in list(route.keys()):
+        route[key] = RSA.importKey(route[key])
+    return route
+
+
+def ip_validation(ip: str) -> bool:
+    regex = "^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$"
+    if re.search(regex, ip):
+        return True
+    return False
+
+
+def remix_route(route: dict, dst_ip: tuple) -> dict:
+    new_route = {dst_ip: DST_PUB_KEY}
+    keys = list(route.keys())
+    shuffle(keys)
+    for i in keys:
+        new_route[i] = route[i]
+    return new_route
+
+
+def new_message(sent: bool, text: str, image_file):
+    print('new message')
+    global msg_counter
+    with msg_counter_lock:
+        msg_counter += 1
+        with msgs_lock:
+            if msg_counter >= 5:
+                y_place = msgs[len(msgs) - 1].get_placement()[1]
+                for i in range(len(msgs)):
+                    msgs[i].set_placement((msgs[i].get_placement()[0], msgs[i].get_placement()[1] - 102))
+                    if msgs[i].get_placement()[1] < 141:
+                        msgs[i].erase()
+            elif len(msgs) == 0:
+                y_place = 141
+            else:
+                y_place = msgs[len(msgs) - 1].get_placement()[1] + 102
+    x_place = 0
+    if sent:
+        x_place = 1002
+    m = Message(sent, text, image_file, (x_place, y_place))
+    with msgs_lock:
+        msgs.append(m)
+    update_msgs()
+
+
+def update_msgs():
+    with msgs_lock:
+        if len(msgs) >= 5:
+            change_screen('media/chat.jpg')
+        for i in range(len(msgs)):
+            if msgs[i].get_seen():
+                with SCREEN_LOCK:
+                    msgs[i].print(SCREEN)
+                with SCREEN_LOCK:
+                    msgs[i].print(SCREEN)
+    pygame.display.flip()
+    pygame.display.update()
+
+
+def send_msg(data: str, destination_ip: tuple):
+    global WRAP
+    route = connect_supersrv(destination_ip[0])
+    new_route = remix_route(route, destination_ip)
+    ip, port = read_file(SRV_STATION_ADDR, 'r')
+    data = data + '[' + ip + ':' + str(port) + ']'
+    data = [data.encode()]
+    for i in range(len(list(new_route.keys()))):
+        data.append((list(new_route.keys())[i][0] + ':' + str(list(new_route.keys())[i][1])).encode())
+    halves, encryption, next = WRAP.wrapping(new_route, data)
+    next = next.decode().split(':')
+    next[1] = int(next[1])
+    send_sock = socket.socket()
+    send_sock.connect((next[0], next[1]))
+    send_with_size(send_sock, pickle.dumps([halves, encryption]))
+    log('SENT', next[0], next[1])
+
+
+def user_(sock: socket.socket):
+    while not STOP:
+        all_socket = socket.socket()
+        data = pickle.loads(recv_by_size(sock))
+        if type(data) != list:
+            msg = got_mail(data)
+            next_stop = ''
+        else:
+            msg = data[0][0]
+            halves = data[0][1]
+            next_stop = data[1].split(':')
+            next_stop = (next_stop[0], int(next_stop[1]))
+
+        if next_stop != '':
+            all_socket.connect(next_stop)
+            send_with_size(all_socket, pickle.dumps((halves, msg)))
+        elif data == '' and next_stop == '':
+            pass
+        else:
+            new_message(False, msg, 'media/not_mymsg_bubble.png')
+        all_socket.close()
+
+
 if __name__ == '__main__':
-    # send_msg('my name is jeff', '8.8.8.8')
-    user_()
-    # ip_validation('123.0.0.1')
-    # main()
+    main()

@@ -10,14 +10,8 @@ class Message:
         self.placement = placement
         self.seen = True
 
-    def get_file(self):
-        return self.img
-
     def get_seen(self):
         return self.seen
-
-    def get_sent(self):
-        return self.sent
 
     def get_placement(self):
         return self.placement

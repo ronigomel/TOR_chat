@@ -21,13 +21,15 @@ def log(action: str, ip: str, port: int):
 
 def main():
     sock = socket.socket()
-    sock.bind(('0.0.0.0', 8820))
+    sock.bind(('192.168.1.172', 8820))
     sock.listen()
+    print('listening...')
 
     while not STOP:
         cli_sock, cli_addr = sock.accept()
+        log('NEW CONNECTION', cli_addr[0], cli_addr[1])
         if cli_addr[0] in STATIONS.keys():
-            online_station(cli_sock, cli_addr, sock)
+            online_station(cli_sock, cli_addr)
         else:
             new_station(cli_sock)
 
@@ -38,57 +40,59 @@ def new_station(cli_sock: socket.socket):
     data = pickle.loads(recv_by_size(cli_sock))
     if data[0].lower() == 'hi':
         with STATIONS_LOCK:
-            STATIONS[data[1]] = [data[2], data[3]]    # data[1] = ip, data[2] = port, data[3] = public key
-            print(STATIONS)
+            pubkey = RSA.importKey(data[3])
+            STATIONS[data[1]] = [data[2], pubkey]  # data[1] = ip, data[2] = port, data[3] = public key
 
 
-def online_station(cli_sock, cli_addr: tuple, sock: socket.socket):
+def online_station(cli_sock, cli_addr: tuple):
     global STATIONS
     global STATIONS_LOCK
     data = pickle.loads(recv_by_size(cli_sock))
     if data[0].lower() == 'msg':
-        print('here')
-        # ping()
-        route = get_route(3, cli_addr[0])
-        print(route)
+        ping()
+        route = get_route(1, cli_addr[0], data[1])
         send_with_size(cli_sock, pickle.dumps(['ROUTE', route]))
+        log('SENT', cli_addr[0], cli_addr[1])
 
 
-def get_route(n: int, ip):
-    print('Generating route...')
-    prev_num = random.randint(0, len(STATIONS) - 2)
-    while ip == list(STATIONS.keys())[prev_num]:
-        prev_num = random.randint(0, len(STATIONS) - 2)
-    route = []
-    for i in range(n):
-        with STATIONS_LOCK:
-            route.append(list(STATIONS.keys())[prev_num])
-
-        current_num = random.randint(0, len(STATIONS) - 2)
-        with STATIONS_LOCK:
-            if list(STATIONS.keys())[current_num] not in route:
-                prev_num = current_num
-
-    full_route = {}
-    for i in route:
-        full_route[i] = STATIONS[i]
-
-    return full_route
+def get_route(n: int, ip, dst):
+    global STATIONS
+    global STATIONS_LOCK
+    with STATIONS_LOCK:
+        if n > len(STATIONS):
+            return 'ERROR'
+    print('generating route...')
+    route = {}
+    with STATIONS_LOCK:
+        for i in range(n):
+            previous = random.randint(0, len(STATIONS) - 1)
+            while ip == list(STATIONS.keys())[previous] and list(STATIONS.keys())[previous] not in list(route.keys()) or dst == list(STATIONS.keys())[previous]:
+                previous = random.randint(0, len(STATIONS) - 1)
+            else:
+                route[(list(STATIONS.keys())[previous], STATIONS[list(STATIONS.keys())[previous]][0])] = STATIONS[list(STATIONS.keys())[previous]][1].exportKey()
+    return route
 
 
 def ping():
     global STATIONS
-    ping_sock = socket.socket()
     delete_stations = []
     with STATIONS_LOCK:
-        for addr in STATIONS.keys():
+        for addr in list(STATIONS.keys()):
             try:
-                ping_sock.connect((addr[0], STATIONS[addr][1]))
-                send_with_size(ping_sock, pickle.dumps('PING'))
+                ping_sock = socket.socket()
+                ping_sock.connect((addr, STATIONS[addr][0]))
+                send_with_size(ping_sock, pickle.dumps(['PING']))
+                log('PING', addr, STATIONS[addr][0])
+                ans = recv_by_size(ping_sock)
+                if len(ans) > 0:
+                    ans = pickle.loads(ans)
+                    if ans.upper() == 'ALIVE':
+                        print(addr, ' online')
+                ping_sock.close()
             except socket.error or socket.timeout:
                 delete_stations.append(addr)
-
-        remove_station(delete_stations)
+        if len(delete_stations) > 0:
+            remove_station(delete_stations)
 
 
 def remove_station(stations_list: list):
@@ -99,21 +103,5 @@ def remove_station(stations_list: list):
 
 
 if __name__ == '__main__':
-    #
-    """
-    sock = socket.socket()
-    sock.bind(('0.0.0.0', 8820))
-    sock.listen()"""
-    STATIONS = {'1.2.3.4': [1263, RSA.generate(1024).publickey()], '127.0.0.1': [1273, RSA.generate(1024).publickey()], '111.222.32.43': [1283, RSA.generate(1024).publickey()], '111.21.34.45': [1293, RSA.generate(1024).publickey()], '11.21.34.45': [1201, 1123123]}
     main()
 
-    """
-    while True:
-        s, address = sock.accept()
-        if address[0] in STATIONS:
-            route = online_station(s, address, sock)
-            print(route)
-            if route != None:
-                break
-    """
-    # main()
